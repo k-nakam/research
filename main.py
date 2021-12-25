@@ -10,12 +10,10 @@ import torch.onnx
 import data
 import model
 
-from adasoft import *
-
 parser = argparse.ArgumentParser(description='PyTorch Wikitext-2 RNN/LSTM/GRU/Transformer Language Model')
 parser.add_argument('--data', type=str, default='./data/wikitext-2',
                     help='location of the data corpus')
-parser.add_argument('--model', type=str, default='LSTM',
+parser.add_argument('--model', type=str, default='Transformer',
                     help='type of recurrent net (RNN_TANH, RNN_RELU, LSTM, GRU, Transformer)')
 parser.add_argument('--emsize', type=int, default=200,
                     help='size of word embeddings')
@@ -27,7 +25,7 @@ parser.add_argument('--lr', type=float, default=20,
                     help='initial learning rate')
 parser.add_argument('--clip', type=float, default=0.25,
                     help='gradient clipping')
-parser.add_argument('--epochs', type=int, default=1, #default is set as 40
+parser.add_argument('--epochs', type=int, default=10,
                     help='upper epoch limit')
 parser.add_argument('--batch_size', type=int, default=20, metavar='N',
                     help='batch size')
@@ -53,10 +51,11 @@ parser.add_argument('--nhead', type=int, default=2,
 parser.add_argument('--dry-run', action='store_true',
                     help='verify the code and the model')
 
-parser.add_argument('--adasoft', default = True, #action='store_true',
-                    help='choose adaptive softmax')
+# Additional argument for adaptive softmax
+parser.add_argument('--adasoft', default = False, #action='store_true'
+                    help='use adaptive softmax')
 parser.add_argument('--cutoff', type = str, default = "2000,10000",
-                    help='cutoff for adaptivesoftmax')
+                    help='cutoff for adaptive softmax (str separated by "," like 2000, 10000)')
 
 args = parser.parse_args()
 
@@ -105,18 +104,15 @@ test_data = batchify(corpus.test, eval_batch_size)
 ###############################################################################
 
 ntokens = len(corpus.dictionary)
-if args.model == 'Transformer':
-    model = model.TransformerModel(ntokens, args.emsize, args.nhead, args.nhid, args.nlayers, args.dropout).to(device)
-else:
-    model = model.RNNModel(args.model, ntokens, args.emsize, args.nhid, args.nlayers, args.dropout, args.tied, args.adasoft).to(device)
-
-
 cutoff_list = [int(item) for item in args.cutoff.split(',')]
-if args.adasoft:
-    print("Use Adaptive Softmax")
-    criterion = AdaptiveLoss(cutoff_list)
+
+if args.model == 'Transformer':
+    model = model.TransformerModel(ntokens, args.emsize, args.nhead, args.nhid, args.nlayers, args.dropout,  args.adasoft, cutoff_list).to(device)
 else:
-    criterion = nn.NLLLoss()
+    model = model.RNNModel(args.model, ntokens, args.emsize, args.nhid, args.nlayers, args.dropout, args.tied, args.adasoft, cutoff_list).to(device)
+
+
+criterion = nn.NLLLoss()
 
 ###############################################################################
 # Training code
@@ -160,11 +156,19 @@ def evaluate(data_source):
             data, targets = get_batch(data_source, i)
             if args.model == 'Transformer':
                 output = model(data)
-                output = output.view(-1, ntokens)
+                #adaptive softmax layer returns loss
+                if not args.adasoft:
+                    output = output.view(-1, ntokens)
             else:
                 output, hidden = model(data, hidden)
                 hidden = repackage_hidden(hidden)
-            total_loss += len(data) * criterion(output, targets).item()
+
+            #adaptive softmax layer returns loss
+            if args.adasoft:
+                loss = output.loss
+            else:
+                loss = criterion(output, targets).item()
+            total_loss += len(data) * loss
     return total_loss / (len(data_source) - 1)
 
 
@@ -183,12 +187,18 @@ def train():
         model.zero_grad()
         if args.model == 'Transformer':
             output = model(data)
-            output = output.view(-1, ntokens)
+            #adaptive softmax layer returns loss
+            if not args.adasoft:
+                output = output.view(-1, ntokens)
         else:
             hidden = repackage_hidden(hidden)
             output, hidden = model(data, hidden)
-            
-        loss = criterion(output, targets)
+
+        #adaptive softmax layer returns loss
+        if args.adasoft:
+            loss = output.loss
+        else:
+            loss = criterion(output, targets)
 
         loss.backward()
 
@@ -244,9 +254,11 @@ try:
         else:
             # Anneal the learning rate if no improvement has been seen in the validation dataset.
             lr /= 4.0
+
 except KeyboardInterrupt:
     print('-' * 89)
     print('Exiting from training early')
+
 
 # Load the best saved model.
 with open(args.save, 'rb') as f:

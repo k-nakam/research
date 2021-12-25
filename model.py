@@ -3,8 +3,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from adasoft import *
-
 class RNNModel(nn.Module):
     """Container module with an encoder, a recurrent module, and a decoder."""
 
@@ -33,7 +31,7 @@ class RNNModel(nn.Module):
         self.adaptive_softmax = adasoft
 
         if self.adaptive_softmax:
-            self.decoder = AdaptiveSoftmax(nhid, [*cutoffs, ntoken])
+            self.out = nn.AdaptiveLogSoftmaxWithLoss(nhid, ntoken, cutoffs)
 
         else:
             self.decoder = nn.Linear(nhid, ntoken)
@@ -54,20 +52,19 @@ class RNNModel(nn.Module):
             nn.init.zeros_(self.decoder.weight)
             nn.init.uniform_(self.decoder.weight, -initrange, initrange)
 
-    def forward(self, input, hidden, target=None):
+    def forward(self, input, hidden):
+        if self.adaptive_softmax:
+            target = input[1:,:] #next words as a target
+            target=target.view(target.size()[0]*target.size()[1])
+            input=input[:-1,:]
+
         emb = self.drop(self.encoder(input))
         output, hidden = self.rnn(emb, hidden)
         output = self.drop(output)
 
         if self.adaptive_softmax:
-            #if target:
-            self.decoder.set_target(target.data)
-            linear = self.decoder(output.contiguous() \
-                .view(output.size(0) * output.size(1), output.size(2)))
-            target=input[1:,:]
-            target=target.view(target.size()[0]*target.size()[1])
-
-            linear = self.decoder(output)
+            output=output.view(-1,output.size()[2])
+            linear = self.out(output,target)
 
         else:
             decoded = self.decoder(output)
@@ -76,7 +73,7 @@ class RNNModel(nn.Module):
 
         return linear, hidden
 
-    def log_prob(self, input, hidden, target):
+    def log_prob(self, input, hidden):
         embed = self.embedding(input)
         output, hidden = self.rnn(embed, hidden)
         decoded = self.decoder.log_prob(output.contiguous() \
@@ -139,7 +136,7 @@ class PositionalEncoding(nn.Module):
 class TransformerModel(nn.Module):
     """Container module with an encoder, a recurrent or transformer module, and a decoder."""
 
-    def __init__(self, ntoken, ninp, nhead, nhid, nlayers, dropout=0.5):
+    def __init__(self, ntoken, ninp, nhead, nhid, nlayers, dropout=0.5,adasoft = True, cutoffs = [2000,10000]):
         super(TransformerModel, self).__init__()
         try:
             from torch.nn import TransformerEncoder, TransformerEncoderLayer
@@ -152,7 +149,13 @@ class TransformerModel(nn.Module):
         self.transformer_encoder = TransformerEncoder(encoder_layers, nlayers)
         self.encoder = nn.Embedding(ntoken, ninp)
         self.ninp = ninp
-        self.decoder = nn.Linear(ninp, ntoken)
+
+        self.adaptive_softmax = adasoft
+
+        if self.adaptive_softmax:
+            self.out = nn.AdaptiveLogSoftmaxWithLoss(ninp, ntoken, cutoffs, div_value=4)
+        else:
+            self.decoder = nn.Linear(ninp, ntoken)
 
         self.init_weights()
 
@@ -164,10 +167,16 @@ class TransformerModel(nn.Module):
     def init_weights(self):
         initrange = 0.1
         nn.init.uniform_(self.encoder.weight, -initrange, initrange)
-        nn.init.zeros_(self.decoder.weight)
-        nn.init.uniform_(self.decoder.weight, -initrange, initrange)
+        if not self.adaptive_softmax:
+            nn.init.zeros_(self.decoder.weight)
+            nn.init.uniform_(self.decoder.weight, -initrange, initrange)
 
     def forward(self, src, has_mask=True):
+        if self.adaptive_softmax:
+            target = src[1:,:] #next words as a target
+            target=target.view(target.size()[0]*target.size()[1])
+            src=src[:-1,:]
+
         if has_mask:
             device = src.device
             if self.src_mask is None or self.src_mask.size(0) != len(src):
@@ -179,5 +188,10 @@ class TransformerModel(nn.Module):
         src = self.encoder(src) * math.sqrt(self.ninp)
         src = self.pos_encoder(src)
         output = self.transformer_encoder(src, self.src_mask)
-        output = self.decoder(output)
-        return F.log_softmax(output, dim=-1)
+        if self.adaptive_softmax:
+            output=output.view(-1,output.size()[2])
+            linear = self.out(output, target)
+        else:
+            output = self.decoder(output)
+            linear = F.log_softmax(output, dim=-1)
+        return linear
