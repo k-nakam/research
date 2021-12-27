@@ -25,7 +25,7 @@ parser.add_argument('--lr', type=float, default=20,
                     help='initial learning rate')
 parser.add_argument('--clip', type=float, default=0.25,
                     help='gradient clipping')
-parser.add_argument('--epochs', type=int, default=40,
+parser.add_argument('--epochs', type=int, default=10,
                     help='upper epoch limit')
 parser.add_argument('--batch_size', type=int, default=20, metavar='N',
                     help='batch size')
@@ -37,7 +37,7 @@ parser.add_argument('--tied', action='store_true',
                     help='tie the word embedding and softmax weights')
 parser.add_argument('--seed', type=int, default=1111,
                     help='random seed')
-parser.add_argument('--cuda', action='store_true',
+parser.add_argument('--cuda', default = True, #action='store_true',
                     help='use CUDA')
 parser.add_argument('--log-interval', type=int, default=200, metavar='N',
                     help='report interval')
@@ -52,7 +52,7 @@ parser.add_argument('--dry-run', action='store_true',
                     help='verify the code and the model')
 
 # Additional argument for adaptive softmax
-parser.add_argument('--adasoft', action='store_true',
+parser.add_argument('--adasoft', default = True, #action='store_true',
                     help='use adaptive softmax')
 parser.add_argument('--cutoff', type = str, default = "2000,10000",
                     help='cutoff for adaptive softmax (str separated by "," like 2000, 10000)')
@@ -155,12 +155,14 @@ def evaluate(data_source):
         for i in range(0, data_source.size(0) - 1, args.bptt):
             data, targets = get_batch(data_source, i)
             if args.model == 'Transformer':
-                output = model(data)
+                #loading targets as adaptive softmax layer computes loss as well (when not using adasoft, targets are not used)
+                output = model(data, targets)
                 #adaptive softmax layer returns loss
                 if not args.adasoft:
                     output = output.view(-1, ntokens)
             else:
-                output, hidden = model(data, hidden)
+                #loading targets as adaptive softmax layer computes loss as well (when not using adasoft, targets are not used)
+                output, hidden = model(data, hidden, targets)
                 hidden = repackage_hidden(hidden)
 
             #adaptive softmax layer returns loss
@@ -186,13 +188,15 @@ def train():
         # If we didn't, the model would try backpropagating all the way to start of the dataset.
         model.zero_grad()
         if args.model == 'Transformer':
-            output = model(data)
+            #loading targets as adaptive softmax layer computes loss as well (when not using adasoft, targets are not used)
+            output = model(data, targets)
             #adaptive softmax layer returns loss
             if not args.adasoft:
                 output = output.view(-1, ntokens)
         else:
             hidden = repackage_hidden(hidden)
-            output, hidden = model(data, hidden)
+            #loading targets as adaptive softmax layer computes loss as well (when not using adasoft, targets are not used)
+            output, hidden = model(data, hidden, targets)
 
         #adaptive softmax layer returns loss
         if args.adasoft:

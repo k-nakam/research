@@ -52,12 +52,7 @@ class RNNModel(nn.Module):
             nn.init.zeros_(self.decoder.weight)
             nn.init.uniform_(self.decoder.weight, -initrange, initrange)
 
-    def forward(self, input, hidden):
-        if self.adaptive_softmax:
-            target = input[1:,:] #next words as a target
-            target=target.view(target.size()[0]*target.size()[1])
-            input=input[:-1,:]
-
+    def forward(self, input, hidden, target):
         emb = self.drop(self.encoder(input))
         output, hidden = self.rnn(emb, hidden)
         output = self.drop(output)
@@ -171,12 +166,7 @@ class TransformerModel(nn.Module):
             nn.init.zeros_(self.decoder.weight)
             nn.init.uniform_(self.decoder.weight, -initrange, initrange)
 
-    def forward(self, src, has_mask=True):
-        if self.adaptive_softmax:
-            target = src[1:,:] #next words as a target
-            target=target.view(target.size()[0]*target.size()[1])
-            src=src[:-1,:]
-
+    def forward(self, src, target, has_mask=True):
         if has_mask:
             device = src.device
             if self.src_mask is None or self.src_mask.size(0) != len(src):
