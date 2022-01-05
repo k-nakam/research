@@ -9,11 +9,12 @@ import torch.onnx
 
 import data
 import model
+from adaptive import *
 
 parser = argparse.ArgumentParser(description='PyTorch Wikitext-2 RNN/LSTM/GRU/Transformer Language Model')
 parser.add_argument('--data', type=str, default='./data/wikitext-2',
                     help='location of the data corpus')
-parser.add_argument('--model', type=str, default='Transformer',
+parser.add_argument('--model', type=str, default='LSTM',
                     help='type of recurrent net (RNN_TANH, RNN_RELU, LSTM, GRU, Transformer)')
 parser.add_argument('--emsize', type=int, default=200,
                     help='size of word embeddings')
@@ -21,11 +22,11 @@ parser.add_argument('--nhid', type=int, default=200,
                     help='number of hidden units per layer')
 parser.add_argument('--nlayers', type=int, default=2,
                     help='number of layers')
-parser.add_argument('--lr', type=float, default=20,
+parser.add_argument('--lr', type=float, default=5,
                     help='initial learning rate')
 parser.add_argument('--clip', type=float, default=0.25,
                     help='gradient clipping')
-parser.add_argument('--epochs', type=int, default=10,
+parser.add_argument('--epochs', type=int, default=40,
                     help='upper epoch limit')
 parser.add_argument('--batch_size', type=int, default=20, metavar='N',
                     help='batch size')
@@ -54,8 +55,10 @@ parser.add_argument('--dry-run', action='store_true',
 # Additional argument for adaptive softmax
 parser.add_argument('--adasoft', default = True, #action='store_true',
                     help='use adaptive softmax')
+parser.add_argument('--adainp', default = True, #action='store_true',
+                    help='use adaptive input representation')
 parser.add_argument('--cutoff', type = str, default = "2000,10000",
-                    help='cutoff for adaptive softmax (str separated by "," like 2000, 10000)')
+                    help='cutoff for adaptive input/softmax (str separated by "," like 2000, 10000)')
 
 args = parser.parse_args()
 
@@ -107,10 +110,9 @@ ntokens = len(corpus.dictionary)
 cutoff_list = [int(item) for item in args.cutoff.split(',')]
 
 if args.model == 'Transformer':
-    model = model.TransformerModel(ntokens, args.emsize, args.nhead, args.nhid, args.nlayers, args.dropout,  args.adasoft, cutoff_list).to(device)
+    model = model.TransformerModel(ntokens, args.emsize, args.nhead, args.nhid, args.nlayers, args.dropout,  args.adasoft,args.adainp, cutoff_list).to(device)
 else:
-    model = model.RNNModel(args.model, ntokens, args.emsize, args.nhid, args.nlayers, args.dropout, args.tied, args.adasoft, cutoff_list).to(device)
-
+    model = model.RNNModel(args.model, ntokens, args.emsize, args.nhid, args.nlayers, args.dropout, args.tied, args.adasoft, args.adainp, cutoff_list).to(device)
 
 criterion = nn.NLLLoss()
 
@@ -165,7 +167,7 @@ def evaluate(data_source):
                 output, hidden = model(data, hidden, targets)
                 hidden = repackage_hidden(hidden)
 
-            #adaptive softmax layer returns loss
+            #in package, adaptive softmax layer returns loss
             if args.adasoft:
                 loss = output.loss
             else:

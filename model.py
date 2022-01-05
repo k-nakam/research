@@ -2,15 +2,22 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from adaptive import *
 
 class RNNModel(nn.Module):
     """Container module with an encoder, a recurrent module, and a decoder."""
 
-    def __init__(self, rnn_type, ntoken, ninp, nhid, nlayers, dropout=0.5, tie_weights=False, adasoft=True, cutoffs = [2000,10000]):
+    def __init__(self, rnn_type, ntoken, ninp, nhid, nlayers, dropout=0.5, tie_weights=False, adasoft=True, adainp = True,
+    cutoffs = [2000,10000]):
         super(RNNModel, self).__init__()
         self.ntoken = ntoken
         self.drop = nn.Dropout(dropout)
-        self.encoder = nn.Embedding(ntoken, ninp)
+
+        self.adainp = adainp
+        if self.adainp:
+            self.encoder = AdaptiveInput(ninp, ntoken, cutoffs)
+        else:
+            self.encoder = nn.Embedding(ntoken, ninp)
         if rnn_type in ['LSTM', 'GRU']:
             self.rnn = getattr(nn, rnn_type)(ninp, nhid, nlayers, dropout=dropout)
         else:
@@ -31,8 +38,7 @@ class RNNModel(nn.Module):
         self.adaptive_softmax = adasoft
 
         if self.adaptive_softmax:
-            self.out = nn.AdaptiveLogSoftmaxWithLoss(nhid, ntoken, cutoffs)
-
+            self.out = AdaptiveSoftmax(ninp, ntoken, cutoffs)
         else:
             self.decoder = nn.Linear(nhid, ntoken)
             if tie_weights:
@@ -47,20 +53,26 @@ class RNNModel(nn.Module):
 
     def init_weights(self):
         initrange = 0.1
-        nn.init.uniform_(self.encoder.weight, -initrange, initrange)
+        if not self.adainp:
+            nn.init.uniform_(self.encoder.weight, -initrange, initrange)
         if not self.adaptive_softmax:
             nn.init.zeros_(self.decoder.weight)
             nn.init.uniform_(self.decoder.weight, -initrange, initrange)
 
     def forward(self, input, hidden, target):
-        emb = self.drop(self.encoder(input))
+        input_size = list(input.size())
+        if self.adainp:
+            input = input.view(-1) #converting to 1d (e.g., [35,20]-> [35*20])
+        encoded = self.encoder(input)
+        if self.adainp:
+            encoded = encoded.view(input_size[0], input_size[1], -1) #converting to 3d (e.g., [35*20*200]-> [35,20,200])
+        emb = self.drop(encoded)
         output, hidden = self.rnn(emb, hidden)
         output = self.drop(output)
 
         if self.adaptive_softmax:
-            output=output.view(-1,output.size()[2])
+            output = output.view(-1, output.size(2))
             linear = self.out(output,target)
-
         else:
             decoded = self.decoder(output)
             decoded = decoded.view(-1, self.ntoken)
@@ -131,7 +143,7 @@ class PositionalEncoding(nn.Module):
 class TransformerModel(nn.Module):
     """Container module with an encoder, a recurrent or transformer module, and a decoder."""
 
-    def __init__(self, ntoken, ninp, nhead, nhid, nlayers, dropout=0.5,adasoft = True, cutoffs = [2000,10000]):
+    def __init__(self, ntoken, ninp, nhead, nhid, nlayers, dropout=0.5, adasoft = True, adainp = True, cutoffs = [2000,10000]):
         super(TransformerModel, self).__init__()
         try:
             from torch.nn import TransformerEncoder, TransformerEncoderLayer
@@ -142,13 +154,17 @@ class TransformerModel(nn.Module):
         self.pos_encoder = PositionalEncoding(ninp, dropout)
         encoder_layers = TransformerEncoderLayer(ninp, nhead, nhid, dropout)
         self.transformer_encoder = TransformerEncoder(encoder_layers, nlayers)
-        self.encoder = nn.Embedding(ntoken, ninp)
+        self.adainp = adainp
+        if self.adainp:
+            self.encoder = AdaptiveInput(ninp, ntoken, cutoffs)
+        else:
+            self.encoder = nn.Embedding(ntoken, ninp) * math.sqrt(ninp)
         self.ninp = ninp
 
         self.adaptive_softmax = adasoft
 
         if self.adaptive_softmax:
-            self.out = nn.AdaptiveLogSoftmaxWithLoss(ninp, ntoken, cutoffs, div_value=4)
+            self.out = AdaptiveSoftmax(ninp, ntoken, cutoffs)
         else:
             self.decoder = nn.Linear(ninp, ntoken)
 
@@ -161,7 +177,8 @@ class TransformerModel(nn.Module):
 
     def init_weights(self):
         initrange = 0.1
-        nn.init.uniform_(self.encoder.weight, -initrange, initrange)
+        if not self.adainp:
+            nn.init.uniform_(self.encoder.weight, -initrange, initrange)
         if not self.adaptive_softmax:
             nn.init.zeros_(self.decoder.weight)
             nn.init.uniform_(self.decoder.weight, -initrange, initrange)
@@ -175,12 +192,18 @@ class TransformerModel(nn.Module):
         else:
             self.src_mask = None
 
-        src = self.encoder(src) * math.sqrt(self.ninp)
+        src_size = list(src.size())
+        if self.adainp:
+            src = src.view(-1) #converting to 1d (e.g., [35,20]-> [35*20])
+        src = self.encoder(src)
+        if self.adainp:
+            src = src.view(src_size[0], src_size[1], -1)
+
         src = self.pos_encoder(src)
         output = self.transformer_encoder(src, self.src_mask)
         if self.adaptive_softmax:
             output=output.view(-1,output.size()[2])
-            linear = self.out(output, target)
+            linear = self.out(output,target)
         else:
             output = self.decoder(output)
             linear = F.log_softmax(output, dim=-1)
