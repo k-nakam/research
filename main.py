@@ -38,7 +38,7 @@ parser.add_argument('--tied', action='store_true',
                     help='tie the word embedding and softmax weights')
 parser.add_argument('--seed', type=int, default=1111,
                     help='random seed')
-parser.add_argument('--cuda', default = True, #action='store_true',
+parser.add_argument('--cuda', action='store_true',
                     help='use CUDA')
 parser.add_argument('--log-interval', type=int, default=200, metavar='N',
                     help='report interval')
@@ -53,9 +53,9 @@ parser.add_argument('--dry-run', action='store_true',
                     help='verify the code and the model')
 
 # Additional argument for adaptive softmax
-parser.add_argument('--adasoft', default = True, #action='store_true',
+parser.add_argument('--adasoft', action='store_true',
                     help='use adaptive softmax')
-parser.add_argument('--adainp', default = True, #action='store_true',
+parser.add_argument('--adainp', action='store_true',
                     help='use adaptive input representation')
 parser.add_argument('--cutoff', type = str, default = "2000,10000",
                     help='cutoff for adaptive input/softmax (str separated by "," like 2000, 10000)')
