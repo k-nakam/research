@@ -158,7 +158,7 @@ class TransformerModel(nn.Module):
         if self.adainp:
             self.encoder = AdaptiveInput(ninp, ntoken, cutoffs)
         else:
-            self.encoder = nn.Embedding(ntoken, ninp) * math.sqrt(ninp)
+            self.encoder = nn.Embedding(ntoken, ninp)
         self.ninp = ninp
 
         self.adaptive_softmax = adasoft
@@ -198,6 +198,8 @@ class TransformerModel(nn.Module):
         src = self.encoder(src)
         if self.adainp:
             src = src.view(src_size[0], src_size[1], -1)
+        else:
+            src = src * math.sqrt(self.ninp)
 
         src = self.pos_encoder(src)
         output = self.transformer_encoder(src, self.src_mask)
